@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Run minimaxm2.5 benchmark directly inside a MI355X Docker container.
+# Usage (inside container, from InferenceX repo root):
+#   bash run_local_minimax_mi355x.sh
+# =============================================================================
+
+set -x
+set -euo pipefail
+
+CURDIR=$(cd "$(dirname "$0")"; pwd)
+
+export AITER_LOG_LEVEL=ERROR
+
+export HF_TOKEN="${HF_TOKEN:-}"
+export HUGGING_FACE_HUB_TOKEN="$HF_TOKEN"
+
+export HF_HUB_CACHE="${HF_HUB_CACHE:-/mnt/hf_hub_cache}"
+
+# Sequence lengths (options: 1024/1024, 8192/1024)
+export ISL="${ISL:-1024}"
+export OSL="${OSL:-1024}"
+
+# Concurrency (suggested values: 4, 8, 16, 32, 64, 128)
+export CONC="${CONC:-64}"
+
+export TP="${TP_SIZE:-4}"
+
+# Expert Parallel switch:
+#   EP_ENABLED=1 -> enable expert parallel, set EP_SIZE == TP
+#   EP_ENABLED=0 -> disable expert parallel, EP_SIZE stays at 1
+export EP_ENABLED="${EP_ENABLED:-1}"
+if [[ "$EP_ENABLED" == "1" ]]; then
+    export EP_SIZE="$TP"
+else
+    export EP_SIZE=1
+fi
+
+export MODEL="MiniMaxAI/MiniMax-M2.5"
+export MAX_MODEL_LEN=$(( ISL + OSL + 200 ))
+export RANDOM_RANGE_RATIO=0.8
+export PORT=8888
+
+export RUN_EVAL="${RUN_EVAL:-false}"
+export EVAL_TASK=gsm8k
+
+export PRECISION=fp8
+export FRAMEWORK=vllm
+export MODEL_PREFIX=minimaxm2.5
+export RUNNER_TYPE=mi355x
+export DP_ATTENTION=false
+export SPEC_DECODING=none
+export DISAGG=false
+export IMAGE="vllm/vllm-openai-rocm:v0.19.0"
+
+# Result filename (unique identifier, no .json suffix)
+export RESULT_FILENAME="minimaxm2.5_isl${ISL}_osl${OSL}_${PRECISION}_mi355x_vllm_tp${TP}-ep${EP_SIZE}-dpa${DP_ATTENTION}_disagg-${DISAGG}_spec-${SPEC_DECODING}_conc${CONC}"
+
+
+if [[ -z "$HF_TOKEN" ]]; then
+    echo "[ERROR] HF_TOKEN is not set. Please run: export HF_TOKEN=hf_xxxxxxxxxxxxxxxx"
+    exit 1
+fi
+
+mkdir -p /workspace/
+rm -f /workspace/server.log
+rm -f /workspace/gpu_metrics.csv
+
+echo "======================================================="
+echo " MiniMaxM2.5 Benchmark - MI355X"
+echo "======================================================="
+echo "  MODEL          : $MODEL"
+echo "  TP             : $TP"
+echo "  EP_ENABLED     : $EP_ENABLED (EP_SIZE=$EP_SIZE)"
+echo "  ISL/OSL        : ${ISL}/${OSL}"
+echo "  MAX_MODEL_LEN  : $MAX_MODEL_LEN"
+echo "  CONC           : $CONC"
+echo "  RESULT_FILENAME: $RESULT_FILENAME"
+echo "======================================================="
+echo ""
+
+# -----------------------------------------------------------------------------
+# Run benchmark (start vllm server + client load test)
+# -----------------------------------------------------------------------------
+echo "[Step 1/2] Running benchmark..."
+bash "benchmarks/single_node/minimaxm2.5_${PRECISION}_mi355x.sh"
+
+# -----------------------------------------------------------------------------
+# Post-process: generate aggregated result
+# -----------------------------------------------------------------------------
+echo ""
+echo "[Step 2/2] Processing results..."
+cd /workspace
+python3 "${CURDIR}/utils/process_result.py"
+
+# -----------------------------------------------------------------------------
+# Print summary
+# -----------------------------------------------------------------------------
+echo ""
+echo "======================================================="
+echo " Done! Output files:"
+echo "   Raw result : ${RESULT_FILENAME}.json"
+echo "   Agg result : agg_${RESULT_FILENAME}.json"
+echo "   GPU metrics: gpu_metrics.csv"
+echo "   Server log : server.log"
+echo "======================================================="
+echo ""
+
+python3 - <<PYEOF
+import json
+with open("agg_${RESULT_FILENAME}.json") as f:
+    d = json.load(f)
+print("--- Key Metrics ---")
+print(f"  Token Throughput per GPU (tok/s/gpu) : {d.get('tput_per_gpu', 0):.3f}")
+print(f"  Input Token Throughput per GPU       : {d.get('input_tput_per_gpu', 0):.3f}")
+print(f"  Output Token Throughput per GPU      : {d.get('output_tput_per_gpu', 0):.3f}")
+print(f"  Interactivity (tok/s/user)           : {d.get('median_intvty', 0):.3f}")
+if d.get('median_ttft'): print(f"  TTFT (ms)                            : {d['median_ttft']*1000:.2f}")
+if d.get('median_tpot'): print(f"  TPOT (ms)                            : {d['median_tpot']*1000:.2f}")
+if d.get('median_e2el'): print(f"  End-to-end Latency (s)               : {d['median_e2el']:.3f}")
+PYEOF
+
+
+# === marathon-optimizations BEGIN (managed by apply_marathon_optimizations.sh) ===
+# MiniMax-M2.5 marathon optimizations adapted to vllm/vllm-openai-rocm:v0.19.0.
+# Remove this block (or re-run with --revert) to disable them.
+export VLLM_ROCM_USE_AITER=1
+export VLLM_ROCM_USE_AITER_TRITON_ROPE=1
+export VLLM_ROCM_SHUFFLE_KV_CACHE_LAYOUT=1
+export AITER_LOG_LEVEL=${AITER_LOG_LEVEL:-ERROR}
+# === marathon-optimizations END ===
