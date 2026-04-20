@@ -1,6 +1,6 @@
 # Benchmarking MiniMax-M2.5 (FP8) on AMD MI355X with vLLM
 
-This guide walks you through running the [InferenceX](https://github.com/limou102/InferenceX) inference benchmark for `MiniMaxAI/MiniMax-M2.5` on an AMD MI355X host, using the `vllm/vllm-openai-rocm:v0.19.0` container.
+This guide walks you through running the [InferenceX (`dev/minimax` branch)](https://github.com/limou102/InferenceX/tree/dev/minimax) inference benchmark for `MiniMaxAI/MiniMax-M2.5` on an AMD MI355X host, using the `vllm/vllm-openai-rocm:v0.19.0` container.
 
 ---
 
