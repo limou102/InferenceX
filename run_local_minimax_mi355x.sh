@@ -36,7 +36,7 @@ else
     export EP_SIZE=1
 fi
 
-export MODEL="MiniMaxAI/MiniMax-M2.5"
+export MODEL="${MODEL:-MiniMaxAI/MiniMax-M2.5}"
 export MAX_MODEL_LEN=$(( ISL + OSL + 200 ))
 export RANDOM_RANGE_RATIO=0.8
 export PORT=8888
@@ -84,6 +84,13 @@ echo ""
 # -----------------------------------------------------------------------------
 echo "[Step 1/2] Running benchmark..."
 bash "benchmarks/single_node/minimaxm2.5_${PRECISION}_mi355x.sh"
+
+# In eval-only mode there is no throughput JSON to post-process; exit early.
+if [[ "${EVAL_ONLY:-false}" == "true" ]]; then
+    echo ""
+    echo "EVAL_ONLY=true: skipping result post-processing."
+    exit 0
+fi
 
 # -----------------------------------------------------------------------------
 # Post-process: generate aggregated result
