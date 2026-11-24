@@ -285,12 +285,18 @@ override_tp2_c64:
     env:
       CONC: '64'
 
-override_dp2_umbp_c256:
+# c128-c384 run DP attention with expert parallelism: DEP2 on two GPUs with UMBP KV
+# offloading, DEP4 on four. The ranks step in lockstep at the MoE, so prefills are
+# admitted every 64 steps, up to 65536 tokens a rank and 8192 a request (more often at
+# c384), and DEP4 caps each rank's prefill step at 1.1x the mean demand
+# (prefill-schedule-balance-factor). The MoE dispatch all-gathers MXFP8 rows with
+# one AITER IPC launch in every graph mode.
+override_dep2_umbp_c128:
   # Each srtctl step has its own mount namespace; a node-local host directory is
   # the one place the UMBP server and the engine workers both see its sockets.
   container_mounts: &umbp_host_dir
     /dev/shm: /umbp-host
-  frontend: &dp2_router
+  frontend: &dp_router
     type: vllm-router
     args:
       policy: consistent_hash
@@ -325,58 +331,108 @@ override_dp2_umbp_c256:
       # Faulting in a ~450 GB pool on 4 KiB pages takes several minutes.
       timeout_seconds: 1800
   roles:
-    agg: &dp2_umbp_agg
+    agg: &dep2_umbp_agg
       gpus: 2
-      args:
-        tensor-parallel-size: 1
+      args: &dep2_umbp_args
+        <<: &dep_args
+          tensor-parallel-size: 1
+          enable-expert-parallel: true
+          max-cudagraph-capture-size: 1024
+          max-num-batched-tokens: 65536
+          long-prefill-token-threshold: 8192
+          prefill-schedule-interval: 64
+          # The DP points were tuned without mono decode.
+          monokernel: null
+          # Per-tensor fp8 KV rows (vllm-project/vllm#66036) instead of the block-scaled
+          # fp8_ds_mla record; the DSpark draft layers share the same cache dtype.
+          kv-cache-dtype: fp8_e4m3
         data-parallel-size: 2
         engram-config: '{"cpu_offload":true}'
-        max-cudagraph-capture-size: 1024
-        max-num-batched-tokens: 16384
-        # The DP2 points were tuned without mono decode.
-        monokernel: null
-        prefill-schedule-interval: 11
-        # Per-tensor fp8 KV rows (vllm-project/vllm#66036) instead of the block-scaled
-        # fp8_ds_mla record; the DSpark draft layers share the same cache dtype.
-        kv-cache-dtype: fp8_e4m3
         kv-transfer-config: '{"kv_connector":"UMBPStoreConnector","kv_role":"kv_both","kv_load_failure_policy":"recompute","kv_connector_extra_config":{"mode":"standalone","endpoint":"unix:///umbp-host/umbp/standalone.grpc.sock"}}'
+      env: &dep_env
+        VLLM_ROCM_AITER_AG_RS_ANY_GRAPH: '1'
+        VLLM_ROCM_DEP_MXFP8_DISPATCH: '1'
+        # Shared experts overlap the MoE collectives on prefill steps too.
+        VLLM_SHARED_EXPERTS_STREAM_TOKEN_THRESHOLD: '131072'
+        VLLM_HTTP_TIMEOUT_KEEP_ALIVE: '900'
   benchmark:
-    env:
-      CONC: '256'
+    env: &dep2_umbp_bench
+      CONC: '128'
       KV_OFFLOADING: 'dram'
       TOTAL_CPU_DRAM_GB: '449'
+      AIPERF_HTTP_TCP_USER_TIMEOUT: '900000'
+      AIPERF_TIMING_CANCEL_DRAIN_TIMEOUT: '300'
 
-override_dp2_umbp_c384:
+override_dep2_umbp_c256:
   container_mounts: *umbp_host_dir
-  frontend: *dp2_router
+  frontend: *dp_router
   setup_script: vllm-router.sh
   services: *umbp_server
   roles:
-    agg: *dp2_umbp_agg
+    agg: *dep2_umbp_agg
   benchmark:
     env:
-      CONC: '384'
-      KV_OFFLOADING: 'dram'
-      TOTAL_CPU_DRAM_GB: '449'
+      <<: *dep2_umbp_bench
+      CONC: '256'
 
-override_dp2_c128:
-  frontend: *dp2_router
+override_dep2_umbp_c384:
+  container_mounts: *umbp_host_dir
+  frontend: *dp_router
+  setup_script: vllm-router.sh
+  services: *umbp_server
+  roles:
+    agg:
+      <<: *dep2_umbp_agg
+      args:
+        <<: *dep2_umbp_args
+        # At c384 the KV cache is full and throughput follows TTFT, so prefills
+        # are admitted every 11 steps in 16384-token batches.
+        prefill-schedule-interval: 11
+        max-num-batched-tokens: 16384
+  benchmark:
+    env:
+      <<: *dep2_umbp_bench
+      CONC: '384'
+
+override_dep4_c128:
+  frontend: *dp_router
+  setup_script: vllm-router.sh
+  roles:
+    agg: &dep4_agg
+      gpus: 4
+      args: &dep4_args
+        <<: *dep_args
+        data-parallel-size: 4
+        engram-config: '{"cpu_offload":false,"embedding_across_dp":true}'
+        max-num-seqs: 128
+        prefill-schedule-balance-factor: 1.1
+      env: *dep_env
+  benchmark:
+    env: &dep4_bench
+      CONC: '128'
+      AIPERF_HTTP_TCP_USER_TIMEOUT: '900000'
+      AIPERF_TIMING_CANCEL_DRAIN_TIMEOUT: '300'
+
+override_dep4_c256:
+  frontend: *dp_router
+  setup_script: vllm-router.sh
+  roles:
+    agg: *dep4_agg
+  benchmark:
+    env:
+      <<: *dep4_bench
+      CONC: '256'
+
+override_dep4_c384:
+  frontend: *dp_router
   setup_script: vllm-router.sh
   roles:
     agg:
-      gpus: 2
+      <<: *dep4_agg
       args:
-        tensor-parallel-size: 1
-        data-parallel-size: 2
-        engram-config: '{"cpu_offload":true}'
-        max-cudagraph-capture-size: 1024
-        max-num-batched-tokens: 16384
-        # The DP2 points were tuned without mono decode.
-        monokernel: null
-        prefill-schedule-interval: 11
-        # Per-tensor fp8 KV rows (vllm-project/vllm#66036) instead of the block-scaled
-        # fp8_ds_mla record; the DSpark draft layers share the same cache dtype.
-        kv-cache-dtype: fp8_e4m3
+        <<: *dep4_args
+        prefill-schedule-interval: 32
   benchmark:
     env:
-      CONC: '128'
+      <<: *dep4_bench
+      CONC: '384'

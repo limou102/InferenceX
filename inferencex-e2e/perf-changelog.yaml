@@ -13298,3 +13298,15 @@
     - "Framework changes that matter here: mum#38 serves the released GQA sliding-window draft under latency_specialized (FlyDSL sliding-window GQA draft attention, TP-split draft fc and Markov head, AITER logits gather, one-launch draft context K/V store); mum#35 adds fine-grained prefix-cache lookups for sliding-window groups (VLLM_SWA_FINE_GRAINED_PREFIX_HITS, default on) and stores the sliding-window prompt-tail block in the vllm-simple CPU offload; mum#36 stops KV-connector chunks at scheduler-block boundaries under DCP; mum#33 adds FlyDSL sparse MLA for the 96 gathered heads of the DCP branch; mum#30 speeds up the K3 mono decode kernels, extends SP prefill token sharding to DCP1 (concurrency 1 inherits VLLM_K3_SP_PREFILL=1) and fuses the indexer prefill query quantization (bitwise identical)."
     - "Draft data types: unchanged. Both drafts ship all-BF16 with no quantization_config, and the draft runs with BF16 weights and activations at every point, sharing the target's BF16 embedding and lm_head. The draft KV cache stays fp8, the same as the target's, at concurrency 16-48, and moves from fp8 to the image's BF16 default at concurrency 1 and 4."
   pr-link: https://github.com/SemiAnalysisAI/InferenceX/pull/5119
+
+- config-keys:
+    - dsv41flash-fp4-mi355x-vllm-agentic-dspark-umbp
+    - dsv41flash-fp4-mi355x-vllm-agentic-dspark-dep4
+  scenario-type:
+    - agentic-coding
+  description:
+    - "Move the concurrency 128-384 points to vllm/vllm-openai-rocm:nightly-eff4de9be3c901c6ad12cb651de64e4b10ced219 and to DP attention with expert parallelism. The two-GPU points become DEP2 (data-parallel-size 2, enable-expert-parallel) with UMBP KV offloading at 128, 256 and 384; the new -dep4 key adds DEP4 (data-parallel-size 4, enable-expert-parallel, Engram tables on the GPUs with embedding_across_dp, max-num-seqs 128) at the same concurrencies without KV offloading."
+    - "Prefills are admitted every 64 steps with max-num-batched-tokens 65536 and long-prefill-token-threshold 8192, so the ranks, which step in lockstep at the MoE, stall on prefills less often. At concurrency 384, where the KV cache is full and throughput follows TTFT, DEP2 admits them every 11 steps with max-num-batched-tokens 16384 and DEP4 every 32 steps."
+    - "Enable the vLLM ROCm DP+EP switches VLLM_ROCM_AITER_AG_RS_ANY_GRAPH (AITER IPC all-gather / reduce-scatter outside FULL graphs, one custom_all_gatherv for every dispatched tensor) and VLLM_ROCM_DEP_MXFP8_DISPATCH (MXFP8 rows instead of bf16 over the dispatch all-gather), shared experts on the side stream for prefill steps too (VLLM_SHARED_EXPERTS_STREAM_TOKEN_THRESHOLD 131072), and on DEP4 the DP prefill balancing --prefill-schedule-balance-factor 1.1."
+    - "The image must carry ROCm/aiter#8535, the tuned fused-MoE rows for the V4.1-Flash a8w4 EP2 shapes and the EP4 32768 / 131072 prefill tiers, which otherwise run AITER's default kernels."
+  pr-link: https://github.com/SemiAnalysisAI/InferenceX/pull/XXX

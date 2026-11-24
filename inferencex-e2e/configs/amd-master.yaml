@@ -974,10 +974,11 @@ dsv41flash-fp4-mi355x-vllm-agentic-dspark-tp8-c1:
       - { tp: 8, kv-offloading: none, spec-decoding: mtp, conc-list: [1], srt-recipe: agentic.yaml }
 
 dsv41flash-fp4-mi355x-vllm-agentic-dspark-umbp:
-  # Carries vllm-project/vllm#64715 (UMBP standalone for DeepSeek-V4.1-Flash), #66036
-  # (per-tensor fp8_e4m3 KV for sparse MLA) and #67377 (AITER FlyDSL dense MXFP8
-  # GEMMs); its MORI v1.2.3.post1 is built with UMBP.
-  image: vllm/vllm-openai-rocm:nightly-9c1d45c21836370104d4eb51d3b46eda20719c47@sha256:694108707f333787b1041caa0e948dd18b86f2450365a94e38819f026275ee32
+  # Needs the vLLM ROCm DP+EP switches VLLM_ROCM_AITER_AG_RS_ANY_GRAPH and
+  # VLLM_ROCM_DEP_MXFP8_DISPATCH, --prefill-schedule-balance-factor, and
+  # ROCm/aiter#8535 (tuned EP2/EP4 fused-MoE rows for V4.1-Flash); its MORI
+  # v1.2.3.post1 is built with UMBP.
+  image: vllm/vllm-openai-rocm:nightly-eff4de9be3c901c6ad12cb651de64e4b10ced219@sha256:a0a24828553413f18f172f9452c2e300c20e80a8fb9ee847a89d2d9448358970
   model: deepseek-ai/DeepSeek-V4.1-Flash
   model-prefix: dsv41flash
   runner: cluster:mi355x-amds
@@ -989,9 +990,28 @@ dsv41flash-fp4-mi355x-vllm-agentic-dspark-umbp:
     agentic-coding:
     - dram-utilization: 0.60
       search-space:
-      - { tp: 2, dp-attn: true, kv-offloading: none, spec-decoding: mtp, conc-list: [128], router: { name: vllm-router, version: "0.1.14" }, srt-recipe: agentic.yaml:override_dp2_c128 }
-      - { tp: 2, dp-attn: true, kv-offloading: dram, kv-offload-backend: { name: umbp, version: "1.2.3.post1" }, spec-decoding: mtp, conc-list: [256], router: { name: vllm-router, version: "0.1.14" }, srt-recipe: agentic.yaml:override_dp2_umbp_c256 }
-      - { tp: 2, dp-attn: true, kv-offloading: dram, kv-offload-backend: { name: umbp, version: "1.2.3.post1" }, spec-decoding: mtp, conc-list: [384], router: { name: vllm-router, version: "0.1.14" }, srt-recipe: agentic.yaml:override_dp2_umbp_c384 }
+      - { tp: 2, ep: 2, dp-attn: true, kv-offloading: dram, kv-offload-backend: { name: umbp, version: "1.2.3.post1" }, spec-decoding: mtp, conc-list: [128], router: { name: vllm-router, version: "0.1.14" }, srt-recipe: agentic.yaml:override_dep2_umbp_c128 }
+      - { tp: 2, ep: 2, dp-attn: true, kv-offloading: dram, kv-offload-backend: { name: umbp, version: "1.2.3.post1" }, spec-decoding: mtp, conc-list: [256], router: { name: vllm-router, version: "0.1.14" }, srt-recipe: agentic.yaml:override_dep2_umbp_c256 }
+      - { tp: 2, ep: 2, dp-attn: true, kv-offloading: dram, kv-offload-backend: { name: umbp, version: "1.2.3.post1" }, spec-decoding: mtp, conc-list: [384], router: { name: vllm-router, version: "0.1.14" }, srt-recipe: agentic.yaml:override_dep2_umbp_c384 }
+
+dsv41flash-fp4-mi355x-vllm-agentic-dspark-dep4:
+  # Same image, DP+EP switches and AITER rows as the -umbp key, on four GPUs without
+  # KV offloading.
+  image: vllm/vllm-openai-rocm:nightly-eff4de9be3c901c6ad12cb651de64e4b10ced219@sha256:a0a24828553413f18f172f9452c2e300c20e80a8fb9ee847a89d2d9448358970
+  model: deepseek-ai/DeepSeek-V4.1-Flash
+  model-prefix: dsv41flash
+  runner: cluster:mi355x-amds
+  precision: fp4
+  framework: vllm
+  multinode: false
+  srt-recipe-dir: dsv41flash/vllm/mi355x-fp4-mtp
+  scenarios:
+    agentic-coding:
+    - dram-utilization: 0.60
+      search-space:
+      - { tp: 4, ep: 4, dp-attn: true, kv-offloading: none, spec-decoding: mtp, conc-list: [128], router: { name: vllm-router, version: "0.1.14" }, srt-recipe: agentic.yaml:override_dep4_c128 }
+      - { tp: 4, ep: 4, dp-attn: true, kv-offloading: none, spec-decoding: mtp, conc-list: [256], router: { name: vllm-router, version: "0.1.14" }, srt-recipe: agentic.yaml:override_dep4_c256 }
+      - { tp: 4, ep: 4, dp-attn: true, kv-offloading: none, spec-decoding: mtp, conc-list: [384], router: { name: vllm-router, version: "0.1.14" }, srt-recipe: agentic.yaml:override_dep4_c384 }
 
 minimaxm31flash-fp4-mi355x-vllm-agentic-dspark:
   image: vllm/vllm-openai-rocm:minimax-m31-flash-75bc8cf1@sha256:f8e8ab239e5edb7c3070c5802fc7fc0cbb889513bf81183dfc98ce1c77e1dfe1
